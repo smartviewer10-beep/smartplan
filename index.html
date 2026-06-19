@@ -815,7 +815,7 @@ tr:hover .tx-acts{opacity:1}
     </nav>
     <div class="nav-sec">Lainnya</div>
     <nav class="nav-menu">
-        <div class="nav-item" data-page="settings">
+        <div class="nav-item" data-page="settings" style="pointer-events:none;opacity:0.5;">
             <span class="ni"><i class="fas fa-cog"></i></span>
             <span>Pengaturan</span>
         </div>
@@ -1172,7 +1172,7 @@ async function gas(functionName, ...args) {
 ═══════════════════════════════════════════════════ */
 const PIN_KEY     = 'kku_pin';
 const SES_KEY     = 'kku_ses';
-const DEFAULT_PIN = '5678';
+const DEFAULT_PIN = '1234';
 const COLORS      = ['#6C63FF','#FF6584','#43CFAC','#FFB347','#54A0FF','#FF6B6B','#A29BFE','#26de81'];
 const PAGE_META   = {
   dashboard:    ['Dashboard','Ringkasan keuangan Anda'],
