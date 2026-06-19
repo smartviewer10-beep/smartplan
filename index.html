@@ -1132,10 +1132,9 @@ const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw-PpY3fjs4rWt041eq
 
 /**
  * Pengganti google.script.run yang melempar request POST asinkron secara aman.
- * Menggunakan mode text/plain untuk memblokir pemicu CORS preflight error di browser.
+ * HIGH PRIORITY FIX: Menyertakan autentikasi PIN server-side ke dalam payload.
  */
 async function gas(functionName, ...args) {
-  // Validasi URL Web App
   if (WEB_APP_URL === "URL_WEB_APP_APPS_SCRIPT_ANDA_DI_SINI" || !WEB_APP_URL.startsWith("https://")) {
     toast("Error: URL Apps Script belum dikonfigurasi di file index.html!", "err");
     document.getElementById('loadingScreen').classList.add('gone');
@@ -1143,6 +1142,8 @@ async function gas(functionName, ...args) {
   }
 
   const payload = args.length === 1 ? args[0] : (args.length > 1 ? args : null);
+  const currentPin = getPin(); // Mengambil PIN lokal untuk dikirim dan divalidasi server-side
+
   try {
     const response = await fetch(WEB_APP_URL, {
       method: 'POST',
@@ -1151,7 +1152,8 @@ async function gas(functionName, ...args) {
       },
       body: JSON.stringify({
         action: functionName,
-        payload: payload
+        payload: payload,
+        pin: currentPin // Kirim PIN untuk diverifikasi server-side (CRITICAL SECURITY FIX)
       })
     });
     
@@ -1301,16 +1303,23 @@ function openChangePIN() {
   openModal('pinModal');
 }
 
-function changePIN() {
+// CRITICAL SECURITY FIX: Mengganti PIN di database Sheets terlebih dahulu sebelum mengubah PIN lokal
+async function changePIN() {
   const old = document.getElementById('pinOld').value;
   const nw  = document.getElementById('pinNew').value;
   const cf  = document.getElementById('pinConf').value;
   if (old !== getPin())            { toast('PIN lama salah', 'err'); return; }
   if (!/^\d{4}$/.test(nw))        { toast('PIN baru harus 4 digit angka', 'err'); return; }
   if (nw !== cf)                   { toast('Konfirmasi PIN tidak cocok', 'err'); return; }
-  setPin(nw);
-  closeModal('pinModal');
-  toast('PIN berhasil diubah! 🔐', 'ok');
+
+  const r = await gas('saveSettings', { pin: nw }); // Update PIN di server-side database
+  if (r && r.success) {
+    setPin(nw);
+    closeModal('pinModal');
+    toast('PIN berhasil diubah di server & lokal! 🔐', 'ok');
+  } else {
+    toast('Gagal sinkronisasi PIN baru ke server Sheets: ' + ((r && r.error) || 'Error'), 'err');
+  }
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1671,7 +1680,6 @@ function setDebtFilter(f, el) {
 function renderDebts() {
   const grid = document.getElementById('debtGrid'); if (!grid) return;
   
-  // Sinkronisasi status active chip filter
   document.querySelectorAll('#pg-debt .chip').forEach(c => c.classList.remove('active'));
   const chipMap = {all:'dcAll', hutang:'dcH', piutang:'dcP', lunas:'dcD'};
   const activeChip = document.getElementById(chipMap[S.debtFilter] || 'dcAll');
@@ -1709,7 +1717,6 @@ function renderDebts() {
         '<i class="fas fa-' + (d.type==='hutang'?'money-bill-wave':'hand-holding-dollar') + '"></i> ' +
         (d.type==='hutang'?'Bayar':'Terima') + '</button>' : '';
         
-    // FIX: Menambahkan tombol Edit dan Hapus yang sebelumnya hilang dari UI renderDebts()
     return '<div class="dc-card ' + pill + '">' +
       '<div class="dc-head"><div><div class="dc-name">' + esc(d.contactName) + '</div><div class="dc-phone"><i class="fas fa-phone" style="font-size:9px"></i> ' + (esc(d.contactPhone)||'—') + '</div></div>' +
       '<span class="dc-pill ' + pill + '">' + pillTxt + '</span></div>' +
@@ -1845,7 +1852,6 @@ function editTx(id) {
   document.getElementById('txId').value = t.id;
   document.getElementById('txModalTitle').textContent = 'Edit Transaksi';
   
-  // FIX: Format ribuan otomatis langsung terisi indah saat modal edit dibuka
   document.getElementById('txAmt').value = Number(t.amount || 0).toLocaleString('id-ID');
   
   document.getElementById('txDesc').value = t.description;
@@ -1973,13 +1979,17 @@ function openPayModal(id) {
 
 async function submitPay() {
   const id  = document.getElementById('payId').value;
-  const amt = Number(
-    String(document.getElementById('payAmt').value).replace(/\./g, '')
-  ) || 0;
+  const amt = document.getElementById('payAmt').value;
   const dt  = document.getElementById('payDate').value;
   const d   = S.debts.find(x => x.id === id);
-  if (!amt || amt <= 0)              { toast('Masukkan jumlah yang valid!', 'err'); return; }
-  if (d && amt > d.remainAmount)     { toast('Jumlah melebihi sisa tagihan!', 'err'); return; }
+  if (!amt)                                              { toast('Masukkan jumlah yang valid!', 'err'); return; }
+  
+  // Konversi internal yang aman di sisi klien untuk validasi sisa tagihan
+  let s = String(amt).replace(/\D/g, '');
+  let amountVal = Number(s) || 0;
+  if (amountVal <= 0)                                    { toast('Masukkan jumlah yang valid!', 'err'); return; }
+  if (d && amountVal > d.remainAmount)                   { toast('Jumlah melebihi sisa tagihan!', 'err'); return; }
+
   const btn = document.getElementById('payBtn');
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; btn.disabled = true;
   try {
@@ -2055,14 +2065,14 @@ function exportCSV() {
 }
 
 /* ═══════════════════════════════════════════════════
-   TOASTS
+   TOASTS (HIGH PRIORITY FIX: Dom-Based XSS Protection)
 ═══════════════════════════════════════════════════ */
 function toast(msg, type) {
   type = type || 'inf';
   const icons = {ok:'✅', err:'❌', inf:'💡'};
   const el = document.createElement('div');
   el.className = 'toast ' + type;
-  el.innerHTML = '<span>' + (icons[type]||'💡') + '</span><span>' + msg + '</span>';
+  el.innerHTML = '<span>' + (icons[type]||'💡') + '</span><span>' + esc(msg) + '</span>'; // Menggunakan esc() untuk sanitasi XSS
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => {
     el.style.animation = 'toastIn .25s reverse forwards';
